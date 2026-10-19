@@ -81,7 +81,7 @@ def _clean(value: str | None) -> str | None:
 
 
 def normalize_subdomain(value: str) -> str | None:
-    """The Freshdesk subdomain from "acme", "acme.freshdesk.com" or a full URL; None if not a freshdesk.com account."""
+    """The Freshdesk subdomain from "yourcompany", "yourcompany.freshdesk.com" or a full URL; None if not a freshdesk.com account."""
     text = value.strip().lower()
     if "://" in text:
         host = urlsplit(text).hostname or ""
@@ -118,7 +118,7 @@ class GatewayCredentialsMiddleware:
             await JSONResponse(
                 {
                     "error": "Invalid domain",
-                    "message": f"{HEADER_DOMAIN} must be the Freshdesk subdomain (acme), acme.freshdesk.com or https://acme.freshdesk.com",
+                    "message": f"{HEADER_DOMAIN} must be the Freshdesk subdomain (yourcompany), yourcompany.freshdesk.com or https://yourcompany.freshdesk.com",
                 },
                 status_code=400,
             )(scope, receive, send)

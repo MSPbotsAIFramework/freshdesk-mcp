@@ -16,10 +16,10 @@ notes and (with confirmation) delete, merge or convert records.
 
 | Header | Required | Type | Default | Allowed values | Description | Example |
 |---|---|---|---|---|---|---|
-| `X-Freshdesk-Domain` | Yes | string | none | subdomain, `<sub>.freshdesk.com` or `https://<sub>.freshdesk.com/...` | The account's Freshdesk subdomain | `acme` |
+| `X-Freshdesk-Domain` | Yes | string | none | subdomain, `<sub>.freshdesk.com` or `https://<sub>.freshdesk.com/...` | The account's Freshdesk subdomain | `yourcompany` |
 | `X-Freshdesk-Api-Key` | Yes | string | none | - | API key of the agent the server acts as | `your-freshdesk-api-key` |
 
-Where to get them: the subdomain is the `acme` in `https://acme.freshdesk.com`. The API key is
+Where to get them: the subdomain is the `yourcompany` in `https://yourcompany.freshdesk.com`. The API key is
 under **Profile settings -> View API Key** of the agent whose permissions the agent should have;
 every action is performed, and audited, as that agent.
 
@@ -85,7 +85,7 @@ from the environment.
 curl -s http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -H "X-Freshdesk-Domain: acme" \
+  -H "X-Freshdesk-Domain: yourcompany" \
   -H "X-Freshdesk-Api-Key: your-freshdesk-api-key" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 
@@ -93,7 +93,7 @@ curl -s http://localhost:8080/mcp \
 curl -s http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -H "X-Freshdesk-Domain: acme" \
+  -H "X-Freshdesk-Domain: yourcompany" \
   -H "X-Freshdesk-Api-Key: your-freshdesk-api-key" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"freshdesk_tickets_search","arguments":{"query":"status:2 AND priority:4"}}}'
 ```

@@ -22,8 +22,8 @@ from freshdesk_mcp import api_client
 from freshdesk_mcp.api_client import FreshdeskClient, FreshdeskCredentials, FreshdeskError
 from freshdesk_mcp.server import _credentials_var, create_mcp_server
 
-CREDS = FreshdeskCredentials("acme", "key-123")
-NEXT = {"link": '<https://acme.freshdesk.com/api/v2/tickets?page=2>; rel="next"'}
+CREDS = FreshdeskCredentials("yourcompany", "key-123")
+NEXT = {"link": '<https://yourcompany.freshdesk.com/api/v2/tickets?page=2>; rel="next"'}
 
 
 @pytest.fixture(autouse=True)
@@ -259,4 +259,4 @@ async def test_read_paths(monkeypatch, tool, args, path):
 async def test_status_reports_agent(monkeypatch):
     rec = Recorder({"agents/me": {"id": 9, "contact": {"name": "Jane", "email": "jane@example.com"}}})
     result = await _call(monkeypatch, rec, "freshdesk_status", {})
-    assert result["domain"] == "acme.freshdesk.com" and result["agent"]["name"] == "Jane"
+    assert result["domain"] == "yourcompany.freshdesk.com" and result["agent"]["name"] == "Jane"
