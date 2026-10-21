@@ -36,6 +36,7 @@ from ._common import (
     SearchQuery,
     Strings,
     compact,
+    enum_value,
     not_confirmed,
     page_params,
     page_result,
@@ -45,6 +46,7 @@ from ._common import (
 
 Status = Annotated[int | None, Field(description="2 Open, 3 Pending, 4 Resolved, 5 Closed (or a custom status id).", ge=2)]
 Priority = Annotated[int | None, Field(description="1 Low, 2 Medium, 3 High, 4 Urgent.", ge=1, le=4)]
+TicketView = Literal["new_and_my_open", "watching", "spam", "deleted"]
 _INCLUDES = {"conversations", "requester", "company", "stats"}
 
 
@@ -75,9 +77,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
     async def freshdesk_tickets_list(
         page: Page_ = None,
         perPage: PerPage = None,
-        filter: Annotated[
-            Literal["new_and_my_open", "watching", "spam", "deleted"] | None, Field(description="Predefined view.")
-        ] = None,
+        filter: Annotated[TicketView | str | None, Field(description="Predefined view.")] = None,
         requester_id: OptionalId = None,
         company_id: OptionalId = None,
         updated_since: Annotated[
@@ -88,7 +88,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
 
         async def action(client: FreshdeskClient) -> dict:
             params = compact(
-                {"filter": filter, "requester_id": requester_id, "company_id": company_id, "updated_since": updated_since}
+                {"filter": enum_value(filter, TicketView), "requester_id": requester_id, "company_id": company_id, "updated_since": updated_since}
             ) | page_params(page, perPage)
             return page_result("tickets", await client.page("tickets", params), page)
 

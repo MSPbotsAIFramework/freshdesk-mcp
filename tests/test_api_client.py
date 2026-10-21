@@ -260,3 +260,24 @@ async def test_status_reports_agent(monkeypatch):
     rec = Recorder({"agents/me": {"id": 9, "contact": {"name": "Jane", "email": "jane@example.com"}}})
     result = await _call(monkeypatch, rec, "freshdesk_status", {})
     assert result["domain"] == "yourcompany.freshdesk.com" and result["agent"]["name"] == "Jane"
+
+
+# ---- compatibility: enum params accept any casing (normalized) and unknown values (passed through)
+
+
+@pytest.mark.parametrize(
+    "tool,arg,given,sent",
+    [
+        ("freshdesk_agents_list", "state", "FullTime", "fulltime"),
+        ("freshdesk_agents_list", "state", "contractor", "contractor"),
+        ("freshdesk_contacts_list", "state", "Blocked", "blocked"),
+        ("freshdesk_contacts_list", "state", "archived", "archived"),
+        ("freshdesk_tickets_list", "filter", "WATCHING", "watching"),
+        ("freshdesk_tickets_list", "filter", "all_tickets", "all_tickets"),
+    ],
+)
+async def test_enum_params_normalized_or_passed_through(monkeypatch, tool, arg, given, sent):
+    rec = Recorder()
+    result = await _call(monkeypatch, rec, tool, {arg: given})
+    assert "error" not in result
+    assert rec.requests[0].url.params[arg] == sent

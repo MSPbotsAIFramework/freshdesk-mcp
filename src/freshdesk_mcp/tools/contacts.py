@@ -36,6 +36,7 @@ from ._common import (
     SearchQuery,
     Strings,
     compact,
+    enum_value,
     not_confirmed,
     page_params,
     page_result,
@@ -44,6 +45,7 @@ from ._common import (
 )
 
 Text = Annotated[str | None, Field(description="Value.")]
+ContactState = Literal["verified", "unverified", "blocked", "deleted"]
 
 
 def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
@@ -62,12 +64,12 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         perPage: PerPage = None,
         email: Annotated[str | None, Field(description="Exact email.")] = None,
         company_id: OptionalId = None,
-        state: Annotated[Literal["verified", "unverified", "blocked", "deleted"] | None, Field(description="Contact state.")] = None,
+        state: Annotated[ContactState | str | None, Field(description="Contact state.")] = None,
     ) -> str:
         """List contacts, optionally by email, company or state."""
 
         async def action(client: FreshdeskClient) -> dict:
-            params = compact({"email": email, "company_id": company_id, "state": state}) | page_params(page, perPage)
+            params = compact({"email": email, "company_id": company_id, "state": enum_value(state, ContactState)}) | page_params(page, perPage)
             return page_result("contacts", await client.page("contacts", params), page)
 
         return await run_tool("freshdesk_contacts_list", client_factory, action)

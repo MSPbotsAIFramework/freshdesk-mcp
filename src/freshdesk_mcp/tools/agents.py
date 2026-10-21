@@ -31,6 +31,7 @@ from ._common import (
     PerPage,
     RecordId,
     compact,
+    enum_value,
     not_confirmed,
     page_params,
     page_result,
@@ -38,6 +39,7 @@ from ._common import (
 )
 
 TicketScope = Annotated[int, Field(description="1 Global access, 2 Group access, 3 Restricted access.", ge=1, le=3)]
+AgentState = Literal["fulltime", "occasional"]
 _AGENT_TYPES = {"support_agent": 1, "field_agent": 2, "collaborator": 3}
 
 
@@ -59,12 +61,12 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         page: Page_ = None,
         perPage: PerPage = None,
         email: Annotated[str | None, Field(description="Exact email.")] = None,
-        state: Annotated[Literal["fulltime", "occasional"] | None, Field(description="Full-time or occasional agents.")] = None,
+        state: Annotated[AgentState | str | None, Field(description="Full-time or occasional agents.")] = None,
     ) -> str:
         """List agents with name, email, ticket scope, groups, roles and availability."""
 
         async def action(client: FreshdeskClient) -> dict:
-            params = compact({"email": email, "state": state}) | page_params(page, perPage)
+            params = compact({"email": email, "state": enum_value(state, AgentState)}) | page_params(page, perPage)
             return page_result("agents", await client.page("agents", params), page)
 
         return await run_tool("freshdesk_agents_list", client_factory, action)
