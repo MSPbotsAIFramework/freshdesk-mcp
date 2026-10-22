@@ -90,6 +90,7 @@ def dump_json_capped(data: Any, max_chars: int = MAX_CHARS) -> str:
                 candidate["retry_page_size"] = max(n, 1)
                 if resume and isinstance(resume.get("start"), int) and resume.get("key"):
                     candidate[resume["key"]] = resume["start"] + n
+                    del candidate["retry_page_size"]  # the continuation field is exact; no retry needed
                     candidate["note"] = (
                         f"Only {n} of {len(items)} records fit the response size limit; "
                         f"continue from {resume['key']}, which starts right after the last record returned."
@@ -113,6 +114,21 @@ def dump_json_capped(data: Any, max_chars: int = MAX_CHARS) -> str:
                 result = compact(build(lo))
                 if len(result) <= max_chars:
                     return result
+
+    # Step 3: a single record (or what is left around a list) is still too large, e.g. one
+    # ticket with a long description. Shorten its long values rather than return nothing.
+    if isinstance(data, dict):
+        whole = {k: v for k, v in data.items() if k not in _CONTINUATION_KEYS}
+        for text_limit, list_limit in _SHRINK_STEPS:
+            candidate = _shrink(whole, text_limit, list_limit)
+            candidate["fields_truncated"] = True
+            candidate["note"] = (
+                "Long fields were shortened to fit the response size limit "
+                "(marked ...[truncated] / ...[N more]); the other fields are complete."
+            )
+            result = compact(candidate)
+            if len(result) <= max_chars:
+                return result
 
     return compact(
         {

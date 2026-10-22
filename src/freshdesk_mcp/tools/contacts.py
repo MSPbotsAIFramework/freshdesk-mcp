@@ -32,6 +32,7 @@ from ._common import (
     Page_,
     PerPage,
     RecordId,
+    SearchOffset,
     SearchPage,
     SearchQuery,
     Strings,
@@ -50,11 +51,13 @@ ContactState = Literal["verified", "unverified", "blocked", "deleted"]
 
 def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
     @mcp.tool(annotations=READ_ONLY)
-    async def freshdesk_contacts_search(query: SearchQuery, page: SearchPage = None) -> str:
+    async def freshdesk_contacts_search(
+        query: SearchQuery, page: SearchPage = None, offset: SearchOffset = None
+    ) -> str:
         """Search contacts with the Freshdesk query language, e.g. email:'jane@example.com' or company_id:12."""
 
         async def action(client: FreshdeskClient) -> dict:
-            return await search(client, "contacts", query, page)
+            return await search(client, "contacts", query, page, offset)
 
         return await run_tool("freshdesk_contacts_search", client_factory, action)
 

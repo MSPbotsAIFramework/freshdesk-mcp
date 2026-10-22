@@ -13,11 +13,14 @@
 # limitations under the License.
 """Tickets and their conversations (replies and notes)."""
 
+import json
 from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
+from .._json import MAX_CHARS, dump_json_capped
+from .._json import compact as compact_json
 from ..api_client import FreshdeskClient
 from ._common import (
     DESTRUCTIVE,
@@ -32,6 +35,7 @@ from ._common import (
     Page_,
     PerPage,
     RecordId,
+    SearchOffset,
     SearchPage,
     SearchQuery,
     Strings,
@@ -62,14 +66,16 @@ def _include(value: str | None) -> str | None:
 
 def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
     @mcp.tool(annotations=READ_ONLY)
-    async def freshdesk_tickets_search(query: SearchQuery, page: SearchPage = None) -> str:
+    async def freshdesk_tickets_search(
+        query: SearchQuery, page: SearchPage = None, offset: SearchOffset = None
+    ) -> str:
         """Search tickets with the Freshdesk query language, e.g. status:2 AND priority:4, or agent_id:123.
 
         String values take single quotes: tag:'vip'. 30 results per page, at most 10 pages.
         """
 
         async def action(client: FreshdeskClient) -> dict:
-            return await search(client, "tickets", query, page)
+            return await search(client, "tickets", query, page, offset)
 
         return await run_tool("freshdesk_tickets_search", client_factory, action)
 
@@ -102,7 +108,16 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         """Get one ticket, optionally with its conversations (first 10), requester, company or stats."""
 
         async def action(client: FreshdeskClient) -> Any:
-            return await client.get(f"tickets/{id}", {"include": _include(include)})
+            ticket = await client.get(f"tickets/{id}", {"include": _include(include)})
+            # Too large: shorten the HTML description first, so the plain-text one survives.
+            if (
+                isinstance(ticket, dict)
+                and isinstance(ticket.get("description"), str)
+                and ticket.get("description_text")
+                and len(compact_json(ticket)) > MAX_CHARS
+            ):
+                ticket = ticket | {"description": ticket["description"][:500] + "...[truncated; see description_text]"}
+            return ticket
 
         return await run_tool("freshdesk_tickets_get", client_factory, action)
 
@@ -233,10 +248,21 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
 
     @mcp.tool(annotations=READ_ONLY)
     async def freshdesk_tickets_list_conversations(id: RecordId, page: Page_ = None, perPage: PerPage = None) -> str:
-        """List a ticket's conversations (replies and notes) in order, with author and private flag."""
+        """List a ticket's conversations (replies and notes) in order, with author and private flag.
 
-        async def action(client: FreshdeskClient) -> dict:
-            return page_result("conversations", await client.page(f"tickets/{id}/conversations", page_params(page, perPage)), page)
+        Long bodies are shortened when a page is too large; read one in full with perPage 1, page N.
+        """
+
+        async def action(client: FreshdeskClient) -> str:
+            result = page_result("conversations", await client.page(f"tickets/{id}/conversations", page_params(page, perPage)), page)
+            payload = json.loads(dump_json_capped(result))
+            if payload.get("fields_truncated"):
+                # There is no single-conversation endpoint: point to paging one at a time.
+                payload["note"] = (
+                    "Long conversation bodies were shortened to fit the response size limit. To read the "
+                    "N-th conversation in full, call again with perPage 1 and page N."
+                )
+            return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
         return await run_tool("freshdesk_tickets_list_conversations", client_factory, action)
 

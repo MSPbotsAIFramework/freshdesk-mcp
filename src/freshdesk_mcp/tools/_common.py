@@ -46,6 +46,13 @@ Page_ = Annotated[int | None, Field(description="Page number, from 1 (default 1)
 PerPage = Annotated[int | None, Field(description=f"Records per page (default 30, max {MAX_PER_PAGE}).", ge=1, le=MAX_PER_PAGE)]
 SearchQuery = Annotated[str, Field(description="Freshdesk query language, without surrounding quotes, e.g. status:2 AND priority:4.", min_length=1, max_length=510)]
 SearchPage = Annotated[int | None, Field(description="Result page, 1-10 (30 results per page).", ge=1, le=10)]
+SearchOffset = Annotated[
+    int | None,
+    Field(description="Result position to start from, 0-299 (overrides page); pass next_offset from the previous result.", ge=0, le=299),
+]
+# Freshdesk search returns 30 results per page and at most 10 pages.
+SEARCH_PAGE_SIZE = 30
+SEARCH_MAX_RESULTS = 300
 Confirm = Annotated[bool | None, Field(description="Must be true, set only after the user approved this exact action.")]
 Ids = Annotated[list[int] | None, Field(description="Numeric ids.")]
 Strings = Annotated[list[str] | None, Field(description="Values.")]
@@ -79,13 +86,43 @@ def quoted(query: str) -> str:
     return f'"{text}"'
 
 
-async def search(client: FreshdeskClient, entity: str, query: str, page: int | None) -> dict:
-    payload = await client.get(f"search/{entity}", {"query": quoted(query), "page": page}) or {}
+def prune(value: Any) -> Any:
+    """Drop null, empty-string, empty-list and empty-object values (search results are full of them)."""
+    if isinstance(value, dict):
+        kept = {k: prune(v) for k, v in value.items()}
+        return {k: v for k, v in kept.items() if v not in (None, "", [], {})}
+    if isinstance(value, list):
+        return [prune(v) for v in value]
+    return value
+
+
+async def search(client: FreshdeskClient, entity: str, query: str, page: int | None, offset: int | None = None) -> dict:
+    """One Freshdesk search page, sliced from ``offset`` so a cut result can continue mid-page.
+
+    Freshdesk returns pages of 30 and has no page size, so a page that does not fit the size
+    limit is cut; next_offset then starts right after the last result returned.
+    """
+    start = offset if offset is not None else ((page or 1) - 1) * SEARCH_PAGE_SIZE
+    current, skip = start // SEARCH_PAGE_SIZE + 1, start % SEARCH_PAGE_SIZE
+    payload = await client.get(f"search/{entity}", {"query": quoted(query), "page": current}) or {}
     results = payload.get("results", []) if isinstance(payload, dict) else []
     total = payload.get("total") if isinstance(payload, dict) else None
-    current = page or 1
-    more = isinstance(total, int) and current * 30 < total and current < 10
-    return compact({"results": results, "count": len(results), "total": total, "page": current, "has_more": more})
+    shown = [prune(r) for r in results[skip:]]
+    after = start + len(shown)
+    reachable = min(total, SEARCH_MAX_RESULTS) if isinstance(total, int) else after
+    more = after < reachable
+    return compact(
+        {
+            "results": shown,
+            "count": len(shown),
+            "total": total,
+            "page": current,
+            "offset": start,
+            "has_more": more,
+            "next_offset": after if more else None,
+            "_resume": {"key": "next_offset", "start": start},
+        }
+    )
 
 
 def not_confirmed(action: str) -> dict:

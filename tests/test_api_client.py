@@ -281,3 +281,74 @@ async def test_enum_params_normalized_or_passed_through(monkeypatch, tool, arg, 
     result = await _call(monkeypatch, rec, tool, {arg: given})
     assert "error" not in result
     assert rec.requests[0].url.params[arg] == sent
+
+
+
+# ---- PRD-21056: search continues inside a page ----------------------------------------------------
+
+
+def _search_api(total, seen):
+    rows = [{"id": i, "subject": f"Ticket {i}", "description_text": "d" * 1500, "custom_fields": {"cf_x": None},
+             "cc_emails": [], **{f"f{k}": f"value {k}" for k in range(80)}} for i in range(total)]
+
+    def reply(request):
+        page = int(request.url.params["page"])
+        seen.append(page)
+        chunk = rows[(page - 1) * 30 : min(page * 30, 300)]
+        return httpx.Response(200, json={"results": chunk, "total": total})
+
+    return reply
+
+
+@pytest.mark.parametrize("tool,entity", [("freshdesk_tickets_search", "tickets"), ("freshdesk_contacts_search", "contacts"),
+                                         ("freshdesk_companies_search", "companies")])
+async def test_search_walks_all_reachable_results_with_next_offset(monkeypatch, tool, entity):
+    seen_pages, ids, args, calls = [], [], {"query": "status:2"}, 0
+    rec = Recorder({f"search/{entity}": _search_api(389, seen_pages)})
+    while True:
+        result = await _call(monkeypatch, rec, tool, args)
+        calls += 1
+        assert "retry_page_size" not in result
+        ids += [r["id"] for r in result["results"]]
+        if result.get("next_offset") is None:
+            break
+        args = {"query": "status:2", "offset": result["next_offset"]}
+        assert calls < 100
+    assert ids == list(range(300))  # Freshdesk's 300-result cap, no gaps or duplicates
+    assert calls > 10  # pages were cut and continued mid-page
+
+
+async def test_search_page_still_works_and_drops_empty_values(monkeypatch):
+    rows = [{"id": i, "subject": f"T{i}", "custom_fields": {"cf_x": None}, "cc_emails": []} for i in range(45)]
+    rec = Recorder({"search/tickets": lambda r: httpx.Response(
+        200, json={"results": rows[(int(r.url.params["page"]) - 1) * 30 :][:30], "total": 45})})
+    result = await _call(monkeypatch, rec, "freshdesk_tickets_search", {"query": "status:2", "page": 2})
+    assert result["results"][0]["id"] == 30 and result["offset"] == 30
+    assert "custom_fields" not in result["results"][0] and "cc_emails" not in result["results"][0]
+    assert (result["count"], result["has_more"]) == (15, False)
+
+
+# ---- PRD-21055: a large ticket keeps its plain-text description ------------------------------------
+
+
+async def test_large_ticket_keeps_description_text(monkeypatch):
+    text = "Plain text body. " * 600  # about 10,000 characters
+    ticket = {"id": 1105009, "subject": "Big", "status": 2, "description": "<div>" + "<p>x</p>" * 3000 + "</div>",
+              "description_text": text}
+    rec = Recorder({"tickets/1105009": ticket})
+    result = await _call(monkeypatch, rec, "freshdesk_tickets_get", {"id": 1105009})
+    assert (result["id"], result["subject"], result["description_text"]) == (1105009, "Big", text)
+    assert result["description"].endswith("...[truncated; see description_text]")
+
+
+# ---- PRD-21057: long conversations point to paging one at a time ----------------------------------
+
+
+async def test_long_conversations_note_points_to_per_page_one(monkeypatch):
+    convs = [{"id": i, "body": "<p>" + "b" * 6000 + "</p>", "body_text": "t" * 6000} for i in range(5)]
+    rec = Recorder({"tickets/7/conversations": convs})
+    result = await _call(monkeypatch, rec, "freshdesk_tickets_list_conversations", {"id": 7})
+    assert result["fields_truncated"] is True and "perPage 1" in result["note"]
+    one = Recorder({"tickets/7/conversations": convs[:1]})
+    single = await _call(monkeypatch, one, "freshdesk_tickets_list_conversations", {"id": 7, "perPage": 1, "page": 1})
+    assert single["conversations"][0]["body_text"] == "t" * 6000

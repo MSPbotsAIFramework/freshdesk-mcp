@@ -34,7 +34,14 @@ not a Freshdesk account gets HTTP 400.
 
 All tools return a JSON string. List tools take `page` and `perPage` (max 100) and return
 `{count, page, has_more, next_page}`; search tools return 30 results per page for at most 10
-pages. Ticket status: 2 Open, 3 Pending, 4 Resolved, 5 Closed; priority: 1 Low, 2 Medium,
+pages (300 results). Search tools also take `offset` (0-299) and return `next_offset`: when a
+page is cut to fit the response size limit, `next_offset` starts right after the last result
+returned, so pass it as `offset` to continue without gaps. Empty values are left out of search
+results. A record too large on its own (e.g. a ticket with a long HTML description) comes back
+with long fields shortened and `fields_truncated: true`; `freshdesk_tickets_get` shortens the
+HTML `description` first and keeps `description_text`. Freshdesk has no endpoint for one
+conversation: to read a long one in full, call `freshdesk_tickets_list_conversations` with
+`perPage: 1` and `page: N`. Ticket status: 2 Open, 3 Pending, 4 Resolved, 5 Closed; priority: 1 Low, 2 Medium,
 3 High, 4 Urgent. **write** marks tools that change data; **confirm** marks tools that also
 need `confirm: true`.
 

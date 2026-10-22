@@ -30,6 +30,7 @@ from ._common import (
     Page_,
     PerPage,
     RecordId,
+    SearchOffset,
     SearchPage,
     SearchQuery,
     compact,
@@ -50,11 +51,13 @@ def _fields(**values: Any) -> dict:
 
 def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
     @mcp.tool(annotations=READ_ONLY)
-    async def freshdesk_companies_search(query: SearchQuery, page: SearchPage = None) -> str:
+    async def freshdesk_companies_search(
+        query: SearchQuery, page: SearchPage = None, offset: SearchOffset = None
+    ) -> str:
         """Search companies with the Freshdesk query language, e.g. name:'Example Inc' or domain:'example.com'."""
 
         async def action(client: FreshdeskClient) -> dict:
-            return await search(client, "companies", query, page)
+            return await search(client, "companies", query, page, offset)
 
         return await run_tool("freshdesk_companies_search", client_factory, action)
 
