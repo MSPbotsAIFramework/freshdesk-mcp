@@ -52,6 +52,10 @@ Offset = Annotated[
 DEFAULT_PER_PAGE = 30
 SearchQuery = Annotated[str, Field(description="Freshdesk query language, without surrounding quotes, e.g. status:2 AND priority:4.", min_length=1, max_length=510)]
 SearchPage = Annotated[int | None, Field(description="Result page, 1-10 (30 results per page).", ge=1, le=10)]
+LocalOffset = Annotated[
+    int | None,
+    Field(description="Record position to start from (0-based); pass next_offset from the previous result.", ge=0),
+]
 SearchOffset = Annotated[
     int | None,
     Field(description="Result position to start from, 0-299 (overrides page); pass next_offset from the previous result.", ge=0, le=299),
@@ -151,8 +155,10 @@ async def search(client: FreshdeskClient, entity: str, query: str, page: int | N
     total = payload.get("total") if isinstance(payload, dict) else None
     shown = [prune(r) for r in results[skip:]]
     after = start + len(shown)
-    reachable = min(total, SEARCH_MAX_RESULTS) if isinstance(total, int) else after
-    more = after < reachable
+    reachable = min(total, SEARCH_MAX_RESULTS) if isinstance(total, int) else SEARCH_MAX_RESULTS
+    # A short page is the last one, even when total says more: total can count results the pages
+    # never return, and continuing from there would ask for the same position again and again.
+    more = len(results) >= SEARCH_PAGE_SIZE and after < reachable
     return compact(
         {
             "results": shown,
@@ -165,6 +171,25 @@ async def search(client: FreshdeskClient, entity: str, query: str, page: int | N
             "_resume": {"key": "next_offset", "start": start},
         }
     )
+
+
+def whole_list(key: str, payload: Any, offset: int | None) -> Any:
+    """An endpoint that returns its whole list at once, in the standard list envelope.
+
+    Sliced locally from ``offset``, so a result cut to fit the size limit continues from next_offset.
+    """
+    if not isinstance(payload, list):
+        return payload
+    start = offset or 0
+    shown = payload[start:]
+    return {
+        key: shown,
+        "count": len(shown),
+        "total": len(payload),
+        "offset": start,
+        "has_more": False,
+        "_resume": {"key": "next_offset", "start": start},
+    }
 
 
 def not_confirmed(action: str) -> dict:

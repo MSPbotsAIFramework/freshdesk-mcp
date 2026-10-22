@@ -28,6 +28,7 @@ from ._common import (
     ClientFactory,
     Confirm,
     CustomFields,
+    LocalOffset,
     Offset,
     OptionalId,
     Page_,
@@ -44,6 +45,7 @@ from ._common import (
     paging,
     run_tool,
     search,
+    whole_list,
 )
 
 Text = Annotated[str | None, Field(description="Value.")]
@@ -169,11 +171,12 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
     @mcp.tool(annotations=READ_ONLY)
     async def freshdesk_contacts_autocomplete(
         term: Annotated[str, Field(description="Start of a name or email.", min_length=1)],
+        offset: LocalOffset = None,
     ) -> str:
         """Quick contact lookup by the start of a name or email; returns ids and names."""
 
         async def action(client: FreshdeskClient) -> Any:
-            return await client.get("contacts/autocomplete", {"term": term.strip()})
+            return whole_list("contacts", await client.get("contacts/autocomplete", {"term": term.strip()}), offset)
 
         return await run_tool("freshdesk_contacts_autocomplete", client_factory, action)
 

@@ -26,10 +26,12 @@ from ._common import (
     WRITES_IDEMPOTENT,
     ClientFactory,
     Confirm,
+    LocalOffset,
     RecordId,
     compact,
     not_confirmed,
     run_tool,
+    whole_list,
 )
 
 Text = Annotated[str | None, Field(description="Value.")]
@@ -57,11 +59,11 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
     # ---- categories ------------------------------------------------------
 
     @mcp.tool(annotations=READ_ONLY)
-    async def freshdesk_solutions_categories_list() -> str:
+    async def freshdesk_solutions_categories_list(offset: LocalOffset = None) -> str:
         """List knowledge-base categories."""
 
         async def action(client: FreshdeskClient) -> Any:
-            return await client.get("solutions/categories")
+            return whole_list("categories", await client.get("solutions/categories"), offset)
 
         return await run_tool("freshdesk_solutions_categories_list", client_factory, action)
 

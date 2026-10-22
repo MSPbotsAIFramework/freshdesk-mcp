@@ -151,7 +151,11 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         """Quick company lookup by the start of its name; returns ids and names."""
 
         async def action(client: FreshdeskClient) -> Any:
-            return await client.get("companies/autocomplete", {"name": name.strip()})
+            found = await client.get("companies/autocomplete", {"name": name.strip()})
+            # Freshdesk answers {"companies": [...]}; add the count every list result has.
+            if isinstance(found, dict) and isinstance(found.get("companies"), list):
+                return {"companies": found["companies"], "count": len(found["companies"]), "has_more": False}
+            return found
 
         return await run_tool("freshdesk_companies_autocomplete", client_factory, action)
 

@@ -105,7 +105,7 @@ async def test_rate_limit_retries_with_retry_after(monkeypatch):
 
 
 async def test_search_wraps_query_in_double_quotes(monkeypatch):
-    rec = Recorder({"search/tickets": {"results": [{"id": 1}], "total": 45}})
+    rec = Recorder({"search/tickets": {"results": [{"id": i} for i in range(30)], "total": 45}})
     result = await _call(monkeypatch, rec, "freshdesk_tickets_search", {"query": "status:2 AND priority:4"})
     assert rec.requests[0].url.params["query"] == '"status:2 AND priority:4"'
     assert (result["total"], result["has_more"]) == (45, True)
@@ -460,3 +460,115 @@ async def test_nth_conversation_in_full_with_offset_or_page(monkeypatch):
     by_offset = await _call(monkeypatch, rec, "freshdesk_tickets_list_conversations", {"id": 7, "perPage": 1, "offset": 3})
     assert by_page["conversations"] == by_offset["conversations"] == [convs[3]]
     assert by_offset["next_offset"] == 4
+
+
+# ---- PRD-21056: search walks always end; PRD-21057: whole lists in the standard envelope -------------------
+
+
+def _paged_search(returned, total, big=0):
+    """Freshdesk search: pages of 30 from the first ``returned`` results, reporting ``total``."""
+
+    def reply(request):
+        page = int(request.url.params["page"])
+        rows = [{"id": i, "description": "x" * big} for i in range((page - 1) * 30, min(page * 30, returned))]
+        return httpx.Response(200, json={"results": rows, "total": total})
+
+    return reply
+
+
+async def _walk_search(monkeypatch, tool, entity, returned, total, big=0):
+    rec = Recorder({f"search/{entity}": _paged_search(returned, total, big)})
+    ids, offset, calls = [], None, 0
+    while True:
+        out = await _call(monkeypatch, rec, tool, {"query": "status:2"} | ({} if offset is None else {"offset": offset}))
+        calls += 1
+        assert "retry_page_size" not in out and calls < 200
+        ids += [r["id"] for r in out["results"]]
+        if out.get("next_offset") is None:
+            return ids, out
+        assert out["next_offset"] > (offset or 0), "next_offset must move forward"
+        offset = out["next_offset"]
+
+
+@pytest.mark.parametrize(
+    "returned,total,expected",
+    [
+        (290, 389, 290),  # total counts more than the pages return: the short page ends the walk
+        (240, 250, 240),
+        (300, 389, 300),  # Freshdesk's 300-result cap
+        (60, 60, 60),  # total is an exact multiple of 30
+        (0, 5, 0),  # total says 5, the page is empty
+    ],
+)
+async def test_search_walk_ends_without_repeating_an_offset(monkeypatch, returned, total, expected):
+    ids, last = await _walk_search(monkeypatch, "freshdesk_tickets_search", "tickets", returned, total)
+    assert ids == list(range(expected)) and last["has_more"] is False
+
+
+@pytest.mark.parametrize(
+    "tool,entity",
+    [("freshdesk_tickets_search", "tickets"), ("freshdesk_contacts_search", "contacts"), ("freshdesk_companies_search", "companies")],
+)
+async def test_search_walk_with_cut_pages_reaches_every_result_once(monkeypatch, tool, entity):
+    ids, _ = await _walk_search(monkeypatch, tool, entity, 389, 389, big=3000)
+    assert ids == list(range(300))
+
+
+async def test_search_short_page_mid_walk_from_an_offset(monkeypatch):
+    # Started inside the last, short page: what is left is returned and the walk stops there.
+    rec = Recorder({"search/tickets": _paged_search(290, 389)})
+    out = await _call(monkeypatch, rec, "freshdesk_tickets_search", {"query": "status:2", "offset": 285})
+    assert [r["id"] for r in out["results"]] == list(range(285, 290)) and "next_offset" not in out
+
+
+async def test_search_without_total_continues_only_after_a_full_page(monkeypatch):
+    rec = Recorder({"search/tickets": {"results": [{"id": i} for i in range(30)]}})
+    full = await _call(monkeypatch, rec, "freshdesk_tickets_search", {"query": "status:2"})
+    assert (full["has_more"], full["next_offset"]) == (True, 30)
+    rec = Recorder({"search/tickets": {"results": [{"id": 1}]}})
+    short = await _call(monkeypatch, rec, "freshdesk_tickets_search", {"query": "status:2"})
+    assert short["has_more"] is False and "next_offset" not in short
+
+
+@pytest.mark.parametrize(
+    "tool,args,path,key",
+    [
+        ("freshdesk_solutions_categories_list", {}, "solutions/categories", "categories"),
+        ("freshdesk_sla_list", {}, "sla_policies", "sla_policies"),
+        ("freshdesk_business_hours_list", {}, "business_hours", "business_hours"),
+        ("freshdesk_canned_responses_list_folders", {}, "canned_response_folders", "folders"),
+        ("freshdesk_contacts_autocomplete", {"term": "ja"}, "contacts/autocomplete", "contacts"),
+    ],
+)
+async def test_whole_lists_use_the_standard_envelope(monkeypatch, tool, args, path, key):
+    rows = [{"id": i, "name": f"n{i}"} for i in range(12)]
+    rec = Recorder({path: rows})
+    out = await _call(monkeypatch, rec, tool, args)
+    assert out == {key: rows, "count": 12, "total": 12, "offset": 0, "has_more": False}
+    tail = await _call(monkeypatch, rec, tool, args | {"offset": 10})
+    assert (tail[key], tail["count"], tail["offset"]) == (rows[10:], 2, 10)
+    past = await _call(monkeypatch, rec, tool, args | {"offset": 50})
+    assert (past[key], past["count"], past["has_more"]) == ([], 0, False)
+    empty = await _call(monkeypatch, Recorder({path: []}), tool, args)
+    assert (empty[key], empty["count"], empty["total"]) == ([], 0, 0)
+
+
+async def test_whole_list_cut_to_fit_continues_from_next_offset(monkeypatch):
+    rows = [{"id": i, "name": f"n{i}", **{f"f{k}": "v" * 60 for k in range(40)}} for i in range(150)]
+    rec = Recorder({"canned_response_folders": rows})
+    ids, offset, cuts = [], None, 0
+    while True:
+        out = await _call(monkeypatch, rec, "freshdesk_canned_responses_list_folders", {} if offset is None else {"offset": offset})
+        assert "retry_page_size" not in out
+        cuts += bool(out.get("truncated"))
+        ids += [r["id"] for r in out["folders"]]
+        offset = out.get("next_offset")
+        if offset is None:
+            break
+    assert cuts > 0 and ids == list(range(150))
+
+
+async def test_companies_autocomplete_has_a_count(monkeypatch):
+    rec = Recorder({"companies/autocomplete": {"companies": [{"id": 1, "name": "Exa"}, {"id": 2, "name": "Exb"}]}})
+    out = await _call(monkeypatch, rec, "freshdesk_companies_autocomplete", {"name": "Ex"})
+    assert out == {"companies": [{"id": 1, "name": "Exa"}, {"id": 2, "name": "Exb"}], "count": 2, "has_more": False}

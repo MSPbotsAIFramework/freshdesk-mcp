@@ -19,7 +19,17 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from ..api_client import FreshdeskClient
-from ._common import READ_ONLY, WRITES, WRITES_IDEMPOTENT, ClientFactory, RecordId, compact, run_tool
+from ._common import (
+    READ_ONLY,
+    WRITES,
+    WRITES_IDEMPOTENT,
+    ClientFactory,
+    LocalOffset,
+    RecordId,
+    compact,
+    run_tool,
+    whole_list,
+)
 
 SlaTarget = Annotated[
     dict[str, Any] | None,
@@ -33,11 +43,11 @@ Escalation = Annotated[dict[str, Any] | None, Field(description="Escalation rule
 
 def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
     @mcp.tool(annotations=READ_ONLY)
-    async def freshdesk_sla_list() -> str:
+    async def freshdesk_sla_list(offset: LocalOffset = None) -> str:
         """List SLA policies with their response / resolution targets and which tickets they cover."""
 
         async def action(client: FreshdeskClient) -> Any:
-            return await client.get("sla_policies")
+            return whole_list("sla_policies", await client.get("sla_policies"), offset)
 
         return await run_tool("freshdesk_sla_list", client_factory, action)
 
@@ -81,11 +91,11 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         return await run_tool("freshdesk_sla_update", client_factory, action)
 
     @mcp.tool(annotations=READ_ONLY)
-    async def freshdesk_business_hours_list() -> str:
+    async def freshdesk_business_hours_list(offset: LocalOffset = None) -> str:
         """List business-hours schedules (working days, hours, time zone)."""
 
         async def action(client: FreshdeskClient) -> Any:
-            return await client.get("business_hours")
+            return whole_list("business_hours", await client.get("business_hours"), offset)
 
         return await run_tool("freshdesk_business_hours_list", client_factory, action)
 
@@ -99,11 +109,11 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         return await run_tool("freshdesk_business_hours_get", client_factory, action)
 
     @mcp.tool(annotations=READ_ONLY)
-    async def freshdesk_canned_responses_list_folders() -> str:
+    async def freshdesk_canned_responses_list_folders(offset: LocalOffset = None) -> str:
         """List canned-response folders."""
 
         async def action(client: FreshdeskClient) -> Any:
-            return await client.get("canned_response_folders")
+            return whole_list("folders", await client.get("canned_response_folders"), offset)
 
         return await run_tool("freshdesk_canned_responses_list_folders", client_factory, action)
 
