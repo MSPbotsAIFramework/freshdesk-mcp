@@ -31,6 +31,7 @@ from ._common import (
     ClientFactory,
     Confirm,
     CustomFields,
+    Offset,
     OptionalId,
     Page_,
     PerPage,
@@ -42,8 +43,8 @@ from ._common import (
     compact,
     enum_value,
     not_confirmed,
-    page_params,
     page_result,
+    paging,
     run_tool,
     search,
 )
@@ -89,14 +90,16 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         updated_since: Annotated[
             str | None, Field(description="ISO 8601; without it Freshdesk returns tickets created in the last 30 days.")
         ] = None,
+        offset: Offset = None,
     ) -> str:
         """List tickets, newest first, optionally by view, requester, company or update time."""
 
         async def action(client: FreshdeskClient) -> dict:
+            paged, number, size, start = paging(offset, page, perPage)
             params = compact(
                 {"filter": enum_value(filter, TicketView), "requester_id": requester_id, "company_id": company_id, "updated_since": updated_since}
-            ) | page_params(page, perPage)
-            return page_result("tickets", await client.page("tickets", params), page)
+            ) | paged
+            return page_result("tickets", await client.page("tickets", params), number, size, start)
 
         return await run_tool("freshdesk_tickets_list", client_factory, action)
 
@@ -247,14 +250,17 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         return await run_tool("freshdesk_tickets_add_note", client_factory, action)
 
     @mcp.tool(annotations=READ_ONLY)
-    async def freshdesk_tickets_list_conversations(id: RecordId, page: Page_ = None, perPage: PerPage = None) -> str:
+    async def freshdesk_tickets_list_conversations(
+        id: RecordId, page: Page_ = None, perPage: PerPage = None, offset: Offset = None
+    ) -> str:
         """List a ticket's conversations (replies and notes) in order, with author and private flag.
 
         Long bodies are shortened when a page is too large; read one in full with perPage 1, page N.
         """
 
         async def action(client: FreshdeskClient) -> str:
-            result = page_result("conversations", await client.page(f"tickets/{id}/conversations", page_params(page, perPage)), page)
+            paged, number, size, start = paging(offset, page, perPage)
+            result = page_result("conversations", await client.page(f"tickets/{id}/conversations", paged), number, size, start)
             payload = json.loads(dump_json_capped(result))
             if payload.get("fields_truncated"):
                 # There is no single-conversation endpoint: point to paging one at a time.

@@ -33,7 +33,10 @@ not a Freshdesk account gets HTTP 400.
 ## Tools
 
 All tools return a JSON string. List tools take `page` and `perPage` (max 100) and return
-`{count, page, has_more, next_page}`; search tools return 30 results per page for at most 10
+`{count, page, has_more, next_page, offset, next_offset}`. They also take `offset` (record
+position, overrides `page`): a page cut to fit the response size limit has no other page holding
+its rest, so `next_offset` starts right after the last record returned; pass it as `offset` to
+continue without gaps. Search tools return 30 results per page for at most 10
 pages (300 results). Search tools also take `offset` (0-299) and return `next_offset`: when a
 page is cut to fit the response size limit, `next_offset` starts right after the last result
 returned, so pass it as `offset` to continue without gaps. Empty values are left out of search

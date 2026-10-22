@@ -27,6 +27,7 @@ from ._common import (
     ClientFactory,
     Confirm,
     CustomFields,
+    Offset,
     Page_,
     PerPage,
     RecordId,
@@ -35,8 +36,8 @@ from ._common import (
     SearchQuery,
     compact,
     not_confirmed,
-    page_params,
     page_result,
+    paging,
     run_tool,
     search,
 )
@@ -62,11 +63,12 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         return await run_tool("freshdesk_companies_search", client_factory, action)
 
     @mcp.tool(annotations=READ_ONLY)
-    async def freshdesk_companies_list(page: Page_ = None, perPage: PerPage = None) -> str:
+    async def freshdesk_companies_list(page: Page_ = None, perPage: PerPage = None, offset: Offset = None) -> str:
         """List companies with name, domains, health score, account tier and industry."""
 
         async def action(client: FreshdeskClient) -> dict:
-            return page_result("companies", await client.page("companies", page_params(page, perPage)), page)
+            paged, number, size, start = paging(offset, page, perPage)
+            return page_result("companies", await client.page("companies", paged), number, size, start)
 
         return await run_tool("freshdesk_companies_list", client_factory, action)
 

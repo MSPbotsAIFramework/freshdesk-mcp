@@ -27,14 +27,15 @@ from ._common import (
     ClientFactory,
     Confirm,
     Ids,
+    Offset,
     Page_,
     PerPage,
     RecordId,
     compact,
     enum_value,
     not_confirmed,
-    page_params,
     page_result,
+    paging,
     run_tool,
 )
 
@@ -62,12 +63,14 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         perPage: PerPage = None,
         email: Annotated[str | None, Field(description="Exact email.")] = None,
         state: Annotated[AgentState | str | None, Field(description="Full-time or occasional agents.")] = None,
+        offset: Offset = None,
     ) -> str:
         """List agents with name, email, ticket scope, groups, roles and availability."""
 
         async def action(client: FreshdeskClient) -> dict:
-            params = compact({"email": email, "state": enum_value(state, AgentState)}) | page_params(page, perPage)
-            return page_result("agents", await client.page("agents", params), page)
+            paged, number, size, start = paging(offset, page, perPage)
+            params = compact({"email": email, "state": enum_value(state, AgentState)}) | paged
+            return page_result("agents", await client.page("agents", params), number, size, start)
 
         return await run_tool("freshdesk_agents_list", client_factory, action)
 

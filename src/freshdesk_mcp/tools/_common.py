@@ -44,6 +44,12 @@ RecordId = Annotated[int, Field(description="Numeric Freshdesk id.", ge=1)]
 OptionalId = Annotated[int | None, Field(description="Numeric Freshdesk id.", ge=1)]
 Page_ = Annotated[int | None, Field(description="Page number, from 1 (default 1).", ge=1)]
 PerPage = Annotated[int | None, Field(description=f"Records per page (default 30, max {MAX_PER_PAGE}).", ge=1, le=MAX_PER_PAGE)]
+Offset = Annotated[
+    int | None,
+    Field(description="Record position to start from (0-based, overrides page); pass next_offset from the previous result.", ge=0),
+]
+# Freshdesk list endpoints return 30 records per page when per_page is not sent.
+DEFAULT_PER_PAGE = 30
 SearchQuery = Annotated[str, Field(description="Freshdesk query language, without surrounding quotes, e.g. status:2 AND priority:4.", min_length=1, max_length=510)]
 SearchPage = Annotated[int | None, Field(description="Result page, 1-10 (30 results per page).", ge=1, le=10)]
 SearchOffset = Annotated[
@@ -67,10 +73,46 @@ def page_params(page: int | None, per_page: int | None) -> dict[str, int | None]
     return {"page": page, "per_page": per_page}
 
 
-def page_result(key: str, page: Page, number: int | None) -> dict:
+def locate(offset: int | None, page: int | None, per_page: int | None) -> tuple[int, int, int]:
+    """(page, per_page, start) for a read from record ``start``.
+
+    Freshdesk lists page by number only, so a position is reached by asking for the page that
+    holds it (same page size) and skipping the records before it.
+    """
+    size = per_page or DEFAULT_PER_PAGE
+    start = offset if offset is not None else ((page or 1) - 1) * size
+    return start // size + 1, size, start
+
+
+def paging(offset: int | None, page: int | None, per_page: int | None) -> tuple[dict[str, int | None], int, int, int]:
+    """(query params, page, per_page, start); without offset the params are exactly page / per_page as given."""
+    number, size, start = locate(offset, page, per_page)
+    return page_params(page if offset is None else number, per_page), number, size, start
+
+
+def page_result(key: str, page: Page, number: int | None, size: int | None = None, start: int | None = None) -> dict:
+    """Records from ``start`` of page ``number``, plus paging.
+
+    {key, count, page, has_more, next_page, offset, next_offset}. next_offset continues right after
+    the last record returned, also when the result is cut to fit the size limit (a page number
+    cannot: the rest of a cut page is not on any other page).
+    """
     current = number or 1
+    size = size or DEFAULT_PER_PAGE
+    first = (current - 1) * size
+    start = first if start is None else start
+    items = page.items[start - first :]
     return compact(
-        {key: page.items, "count": len(page.items), "page": current, "has_more": page.has_more, "next_page": current + 1 if page.has_more else None}
+        {
+            key: items,
+            "count": len(items),
+            "page": current,
+            "has_more": page.has_more,
+            "next_page": current + 1 if page.has_more else None,
+            "offset": start,
+            "next_offset": start + len(items) if page.has_more else None,
+            "_resume": {"key": "next_offset", "start": start},
+        }
     )
 
 

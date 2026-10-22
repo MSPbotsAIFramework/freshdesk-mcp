@@ -28,6 +28,7 @@ from ._common import (
     ClientFactory,
     Confirm,
     CustomFields,
+    Offset,
     OptionalId,
     Page_,
     PerPage,
@@ -39,8 +40,8 @@ from ._common import (
     compact,
     enum_value,
     not_confirmed,
-    page_params,
     page_result,
+    paging,
     run_tool,
     search,
 )
@@ -68,12 +69,14 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         email: Annotated[str | None, Field(description="Exact email.")] = None,
         company_id: OptionalId = None,
         state: Annotated[ContactState | str | None, Field(description="Contact state.")] = None,
+        offset: Offset = None,
     ) -> str:
         """List contacts, optionally by email, company or state."""
 
         async def action(client: FreshdeskClient) -> dict:
-            params = compact({"email": email, "company_id": company_id, "state": enum_value(state, ContactState)}) | page_params(page, perPage)
-            return page_result("contacts", await client.page("contacts", params), page)
+            paged, number, size, start = paging(offset, page, perPage)
+            params = compact({"email": email, "company_id": company_id, "state": enum_value(state, ContactState)}) | paged
+            return page_result("contacts", await client.page("contacts", params), number, size, start)
 
         return await run_tool("freshdesk_contacts_list", client_factory, action)
 

@@ -352,3 +352,111 @@ async def test_long_conversations_note_points_to_per_page_one(monkeypatch):
     one = Recorder({"tickets/7/conversations": convs[:1]})
     single = await _call(monkeypatch, one, "freshdesk_tickets_list_conversations", {"id": 7, "perPage": 1, "page": 1})
     assert single["conversations"][0]["body_text"] == "t" * 6000
+
+
+# ---- Page-number paging that survives truncation (offset / next_offset) -----------------------------
+# Self-test checklist: a cut page continues right after the last record returned (from page 1 and
+# from a later page); offset aligned / not aligned to a page; offset 0; offset past the end; offset
+# wins over page; page-only calls send the same request as before; no retry hint for a page size.
+
+TOTAL = 137
+ROWS = [{"id": i, "name": f"Row {i}", **{f"f{k}": f"value {k}" for k in range(40)}} for i in range(TOTAL)]
+SMALL = [{"id": i} for i in range(TOTAL)]
+
+PAGED_TOOLS = [
+    ("freshdesk_tickets_list", "tickets", "tickets", {}),
+    ("freshdesk_tickets_list_conversations", "tickets/7/conversations", "conversations", {"id": 7}),
+    ("freshdesk_contacts_list", "contacts", "contacts", {}),
+    ("freshdesk_companies_list", "companies", "companies", {}),
+    ("freshdesk_agents_list", "agents", "agents", {}),
+    ("freshdesk_groups_list", "groups", "groups", {}),
+]
+
+
+def _paged_api(rows):
+    """Pages by page / per_page (default 30) like Freshdesk, with a Link rel="next" header when there is more."""
+
+    def reply(request):
+        params = request.url.params
+        number, size = int(params.get("page", 1)), int(params.get("per_page", 30))
+        more = number * size < len(rows)
+        return httpx.Response(200, json=rows[(number - 1) * size : number * size], headers=NEXT if more else {})
+
+    return reply
+
+
+def _sent(rec):
+    return dict(rec.requests[0].url.params)
+
+
+async def _walk(monkeypatch, rec, tool, key, args):
+    ids, calls, cut = [], 0, 0
+    while True:
+        result = await _call(monkeypatch, rec, tool, args)
+        calls += 1
+        assert "retry_page_size" not in result, result.get("note")
+        cut += bool(result.get("truncated"))
+        ids += [r["id"] for r in result[key]]
+        if result.get("next_offset") is None:
+            return ids, cut
+        args = {k: v for k, v in args.items() if k != "page"} | {"offset": result["next_offset"]}
+        assert calls < 200
+
+
+@pytest.mark.parametrize("tool,path,key,extra", PAGED_TOOLS)
+async def test_cut_pages_continue_without_gaps_from_page_1(monkeypatch, tool, path, key, extra):
+    ids, cut = await _walk(monkeypatch, Recorder({path: _paged_api(ROWS)}), tool, key, extra | {"perPage": 50})
+    assert cut > 0  # pages really were cut
+    assert ids == [r["id"] for r in ROWS]  # no gaps, no duplicates
+
+
+@pytest.mark.parametrize("tool,path,key,extra", PAGED_TOOLS)
+async def test_cut_pages_continue_without_gaps_from_a_later_page(monkeypatch, tool, path, key, extra):
+    ids, cut = await _walk(monkeypatch, Recorder({path: _paged_api(ROWS)}), tool, key, extra | {"page": 3, "perPage": 40})
+    assert cut > 0
+    assert ids == [r["id"] for r in ROWS[80:]]
+
+
+@pytest.mark.parametrize("tool,path,key,extra", PAGED_TOOLS)
+@pytest.mark.parametrize("offset,size,page,first", [(30, 25, 2, 30), (50, 25, 3, 50), (0, 25, 1, 0), (35, None, 2, 35)])
+async def test_offset_reads_the_page_that_holds_it(monkeypatch, tool, path, key, extra, offset, size, page, first):
+    rec = Recorder({path: _paged_api(SMALL)})
+    result = await _call(monkeypatch, rec, tool, extra | {"offset": offset} | ({"perPage": size} if size else {}))
+    sent = _sent(rec)
+    assert sent["page"] == str(page) and sent.get("per_page") == (str(size) if size else None)
+    assert result[key][0]["id"] == first and result["offset"] == offset
+    assert result["next_offset"] == page * (size or 30)  # rest of the page returned, next page starts after it
+
+
+@pytest.mark.parametrize("tool,path,key,extra", PAGED_TOOLS)
+async def test_offset_past_the_end_is_empty(monkeypatch, tool, path, key, extra):
+    result = await _call(monkeypatch, Recorder({path: _paged_api(SMALL)}), tool, extra | {"offset": 500, "perPage": 25})
+    assert (result["count"], result["has_more"], result.get("next_offset")) == (0, False, None)
+
+
+@pytest.mark.parametrize("tool,path,key,extra", PAGED_TOOLS)
+async def test_offset_wins_over_page(monkeypatch, tool, path, key, extra):
+    rec = Recorder({path: _paged_api(SMALL)})
+    result = await _call(monkeypatch, rec, tool, extra | {"offset": 10, "page": 4, "perPage": 10})
+    assert _sent(rec)["page"] == "2" and result[key][0]["id"] == 10
+
+
+@pytest.mark.parametrize("tool,path,key,extra", PAGED_TOOLS)
+@pytest.mark.parametrize("args,sent", [({"page": 2, "perPage": 25}, {"page": "2", "per_page": "25"}), ({"page": 2}, {"page": "2"}), ({}, {})])
+async def test_page_only_sends_the_same_request_as_before(monkeypatch, tool, path, key, extra, args, sent):
+    rec = Recorder({path: _paged_api(SMALL)})
+    result = await _call(monkeypatch, rec, tool, extra | args)
+    assert {k: v for k, v in _sent(rec).items() if k in ("page", "per_page")} == sent
+    number, size = args.get("page", 1), args.get("perPage", 30)
+    assert [r["id"] for r in result[key]] == list(range((number - 1) * size, number * size))
+    assert (result["page"], result["offset"], result["next_offset"], result["has_more"], result["next_page"]) == (
+        number, (number - 1) * size, number * size, True, number + 1)
+
+
+async def test_nth_conversation_in_full_with_offset_or_page(monkeypatch):
+    convs = [{"id": i, "body": "<p>" + "b" * 6000 + "</p>", "body_text": "t" * 6000} for i in range(5)]
+    rec = Recorder({"tickets/7/conversations": _paged_api(convs)})
+    by_page = await _call(monkeypatch, rec, "freshdesk_tickets_list_conversations", {"id": 7, "perPage": 1, "page": 4})
+    by_offset = await _call(monkeypatch, rec, "freshdesk_tickets_list_conversations", {"id": 7, "perPage": 1, "offset": 3})
+    assert by_page["conversations"] == by_offset["conversations"] == [convs[3]]
+    assert by_offset["next_offset"] == 4

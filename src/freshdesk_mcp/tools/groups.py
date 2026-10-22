@@ -26,13 +26,14 @@ from ._common import (
     WRITES_IDEMPOTENT,
     ClientFactory,
     Confirm,
+    Offset,
     Page_,
     PerPage,
     RecordId,
     compact,
     not_confirmed,
-    page_params,
     page_result,
+    paging,
     run_tool,
 )
 
@@ -48,11 +49,12 @@ def _body(**values: Any) -> dict:
 
 def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
     @mcp.tool(annotations=READ_ONLY)
-    async def freshdesk_groups_list(page: Page_ = None, perPage: PerPage = None) -> str:
+    async def freshdesk_groups_list(page: Page_ = None, perPage: PerPage = None, offset: Offset = None) -> str:
         """List agent groups with members, escalation and business hours."""
 
         async def action(client: FreshdeskClient) -> dict:
-            return page_result("groups", await client.page("groups", page_params(page, perPage)), page)
+            paged, number, size, start = paging(offset, page, perPage)
+            return page_result("groups", await client.page("groups", paged), number, size, start)
 
         return await run_tool("freshdesk_groups_list", client_factory, action)
 
